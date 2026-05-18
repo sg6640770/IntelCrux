@@ -1,15 +1,17 @@
 package com.youtube_video.summary.service;
 
+import com.resend.Resend;
+import com.resend.core.exception.ResendException;
+import com.resend.services.emails.model.CreateEmailOptions;
 import com.youtube_video.summary.dao.UserDao;
 import com.youtube_video.summary.model.User;
-import jakarta.mail.MessagingException;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.mail.SimpleMailMessage;
-import org.springframework.mail.javamail.JavaMailSender;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.stereotype.Service;
 
 import java.sql.SQLException;
+import java.util.List;
 import java.util.UUID;
 
 @Service
@@ -18,15 +20,14 @@ public class AuthService {
     @Autowired
     private UserDao userDao;
 
-    @Autowired
-    private JavaMailSender mailSender;
+    @Value("${resend.api.key}")
+    private String resendApiKey;
 
     @Autowired
-    private JwtService jwtService; // Inject JwtService
+    private JwtService jwtService;
 
     private final BCryptPasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
 
-    // SIGNUP: Save user and send verification email
     public void register(String email, String password) throws SQLException {
         if (userDao.findByEmail(email) != null) {
             throw new RuntimeException("Email is already registered.");
@@ -45,17 +46,14 @@ public class AuthService {
         sendVerificationEmail(email, token);
     }
 
-    // VERIFICATION: Match token and mark user as verified
     public void verify(String token) throws SQLException {
         User user = userDao.findByVerificationToken(token);
         if (user == null) {
             throw new RuntimeException("Invalid or expired verification token.");
         }
-
-        userDao.verifyUser(token); // sets verified = true and clears the token
+        userDao.verifyUser(token);
     }
 
-    // LOGIN: Allow only verified users
     public String login(String email, String rawPassword) throws SQLException {
         User user = userDao.findByEmail(email);
 
@@ -71,19 +69,27 @@ public class AuthService {
             throw new RuntimeException("Invalid credentials.");
         }
 
-        // Generate and return JWT token
         return jwtService.generateToken(user.getEmail());
     }
 
-    // EMAIL: Send verification email
     private void sendVerificationEmail(String to, String token) {
-        String verificationUrl = "http://localhost:8080/verify?token=" + token;
+        String verificationLink = "https://intelcrux-production.up.railway.app/verify?token=" + token;
 
-        SimpleMailMessage message = new SimpleMailMessage();
-        message.setTo(to);
-        message.setSubject("Verify your email");
-        message.setText("Welcome! Please verify your account by clicking the link: " + verificationUrl);
+        Resend resend = new Resend(resendApiKey);
 
-        mailSender.send(message);
+        CreateEmailOptions params = CreateEmailOptions.builder()
+                .from("onboarding@resend.dev")
+                .to(List.of(to))
+                .subject("Verify your email")
+                .html("<p>Click to verify: <a href=\"" + verificationLink + "\">" + verificationLink + "</a></p>")
+                .build();
+
+        try {
+            resend.emails().send(params);
+            System.out.println("✅ Verification email sent to " + to);
+        } catch (ResendException e) {
+            System.err.println("❌ Failed to send verification email: " + e.getMessage());
+            throw new RuntimeException("Failed to send verification email", e);
+        }
     }
 }
